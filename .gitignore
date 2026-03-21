@@ -6,3 +6,4 @@ Phishing_Email.csv
 screenshots/
 *.keras
 malicious_phish.csv
+*.pkl
