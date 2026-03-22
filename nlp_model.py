@@ -69,6 +69,8 @@ plt.title('NLP Model — Confusion Matrix')
 plt.ylabel('Actual Label')
 plt.xlabel('Predicted Label')
 plt.tight_layout()
+plt.savefig('nlp_confusion_matrix.png', dpi=150, bbox_inches='tight')
+print("Confusion matrix saved as nlp_confusion_matrix.png")
 
 # ── Save the model ────────────────────────────────────────
 joblib.dump(model, 'nlp_model.pkl')
