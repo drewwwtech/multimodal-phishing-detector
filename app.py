@@ -8,16 +8,11 @@ import time
 from PIL import Image
 import os
 
-# ── Page config ───────────────────────────────────────────
 st.set_page_config(
     page_title="Multi-Modal Phishing Detector",
     page_icon="🎣",
     layout="wide"
 )
-
-# ── URL Feature Extraction ────────────────────────────────
-# Defined BEFORE load_models so extract_features is available
-# when the URL model is being retrained inside load_models
 
 FEATURE_NAMES = [
     'url_length', 'dot_count', 'slash_count',
@@ -62,7 +57,6 @@ def extract_features(url):
     def has_shortener(url):
         return 1 if any(s in url.lower() for s in
                        ['bit.ly','tinyurl','goo.gl','t.co','ow.ly','short.io']) else 0
-
     return [
         get_url_length(url), get_dot_count(url), get_slash_count(url),
         has_ip_address(url), has_at_symbol(url), has_https(url),
@@ -72,93 +66,61 @@ def extract_features(url):
         get_path_length(url), has_shortener(url),
     ]
 
-
-# ── Load models ───────────────────────────────────────────
 @st.cache_resource
 def load_models():
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import train_test_split
+    import gc
 
     nlp_model = joblib.load('nlp_model.pkl')
     vectorizer = joblib.load('tfidf_vectorizer.pkl')
 
-    # Retrain URL model if pkl doesn't exist
     if os.path.exists('url_model.pkl'):
         url_model = joblib.load('url_model.pkl')
     else:
-        setup_msg = st.info("Setting up URL model... (this may take 1-2 minutes)")
+        with st.spinner("Setting up URL model for first time... (~1 minute)"):
+            df_emails = pd.read_csv('clean_emails.csv')
+            df_emails['urls'] = df_emails['urls'].apply(ast.literal_eval)
+            df_emails_with_urls = df_emails[df_emails['urls'].apply(len) > 0].copy()
+            df_emails_with_urls['url'] = df_emails_with_urls['urls'].apply(lambda x: x[0])
+            df_email_urls = df_emails_with_urls[['url', 'label']].copy()
 
-        # Load email URLs
-        df_emails = pd.read_csv('clean_emails.csv')
-        df_emails['urls'] = df_emails['urls'].apply(ast.literal_eval)
-        df_emails_with_urls = df_emails[
-            df_emails['urls'].apply(len) > 0].copy()
-        df_emails_with_urls['url'] = df_emails_with_urls['urls'].apply(
-            lambda x: x[0])
-        df_email_urls = df_emails_with_urls[['url', 'label']].copy()
+            df_malicious = pd.read_csv('malicious_phish.csv', usecols=['url', 'type'])
+            df_malicious = df_malicious[df_malicious['type'].isin(['phishing', 'benign'])]
+            df_malicious['label'] = df_malicious['type'].map({'benign': 0, 'phishing': 1})
+            df_malicious = df_malicious[['url', 'label']]
 
-        # Load malicious URLs — full dataset
-        df_malicious = pd.read_csv('malicious_phish.csv',
-                                   usecols=['url', 'type'])  # only load needed columns
-        df_malicious = df_malicious[
-            df_malicious['type'].isin(['phishing', 'benign'])]
-        df_malicious['label'] = df_malicious['type'].map(
-            {'benign': 0, 'phishing': 1})
-        df_malicious = df_malicious[['url', 'label']]
+            df_benign = df_malicious[df_malicious['label'] == 0].sample(50000, random_state=42)
+            df_phishing = df_malicious[df_malicious['label'] == 1]
+            df_combined = pd.concat([df_email_urls, df_benign, df_phishing], ignore_index=True)
+            df_combined = df_combined.dropna(subset=['url'])
+            df_combined = df_combined[df_combined['url'].str.strip() != '']
 
-        # Full dataset — same as paper
-        df_benign = df_malicious[
-            df_malicious['label'] == 0].sample(50000, random_state=42)
-        df_phishing = df_malicious[df_malicious['label'] == 1]
-        df_combined = pd.concat(
-            [df_email_urls, df_benign, df_phishing], ignore_index=True)
-        df_combined = df_combined.dropna(subset=['url'])
-        df_combined = df_combined[df_combined['url'].str.strip() != '']
+            del df_malicious, df_benign, df_phishing
+            gc.collect()
 
-        # Free memory before feature extraction
-        del df_malicious, df_benign, df_phishing
-        import gc
-        gc.collect()
+            features = df_combined['url'].apply(extract_features)
+            X = pd.DataFrame(features.tolist(), columns=FEATURE_NAMES)
+            y = df_combined['label'].reset_index(drop=True)
 
-        # Extract features
-        features = df_combined['url'].apply(extract_features)
-        X = pd.DataFrame(features.tolist(), columns=FEATURE_NAMES)
-        y = df_combined['label'].reset_index(drop=True)
+            del df_combined, features
+            gc.collect()
 
-        # Free more memory
-        del df_combined, features
-        gc.collect()
+            X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
-        X_train, _, y_train, _ = train_test_split(
-            X, y, test_size=0.2, stratify=y, random_state=42)
-
-        # Memory efficient Random Forest settings
-        url_model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=20,
-            min_samples_split=5,
-            random_state=42,
-            class_weight='balanced',
-            n_jobs=-1    # use all CPU cores — faster training
-        )
-        url_model.fit(X_train, y_train)
-        joblib.dump(url_model, 'url_model.pkl')
-        setup_msg.empty()
-        st.success("URL model ready!")
+            url_model = RandomForestClassifier(
+                n_estimators=200, max_depth=20, min_samples_split=5,
+                random_state=42, class_weight='balanced', n_jobs=-1
+            )
+            url_model.fit(X_train, y_train)
+            joblib.dump(url_model, 'url_model.pkl')
 
     return nlp_model, vectorizer, url_model
 
-
-# ── Unpack models into global variables ───────────────────
-# This is critical — functions below need these as globals
 nlp_model, vectorizer, url_model = load_models()
 
-
-# ── Helper functions ──────────────────────────────────────
-
 def extract_urls(text):
-    pattern = r'https?://[^\s<>"\'()]+'
-    return re.findall(pattern, text)
+    return re.findall(r'https?://[^\s<>"\'()]+', text)
 
 def clean_text(text):
     urls = re.findall(r'https?://\S+', text)
@@ -211,9 +173,6 @@ def combine_scores(nlp_score, url_score=None, nlp_weight=0.6):
         method = f"Weighted average (NLP x{nlp_weight} + URL x{url_weight})"
     return final_score, method
 
-
-# ── App Layout ────────────────────────────────────────────
-
 st.title("Multi-Modal Phishing Detector")
 st.markdown(
     "Paste an email below to analyze it for phishing using "
@@ -221,14 +180,12 @@ st.markdown(
 )
 st.divider()
 
-# ── Input ─────────────────────────────────────────────────
 col1, col2 = st.columns([2, 1])
 
 with col1:
     st.subheader("Paste Email Here")
     email_input = st.text_area(
-        label="email",
-        height=200,
+        label="email", height=200,
         placeholder="Paste the full email text here including any links...",
         label_visibility="collapsed"
     )
@@ -236,8 +193,7 @@ with col1:
 with col2:
     st.subheader("Settings")
     enable_screenshot = st.checkbox(
-        "Capture website screenshot",
-        value=True,
+        "Capture website screenshot", value=True,
         help="Automatically visits and screenshots any link found in the email"
     )
     st.info(
@@ -250,43 +206,34 @@ with col2:
     url_weight = round(1.0 - nlp_weight, 1)
     st.write(f"URL Weight: {url_weight}")
 
-# ── Analyze button ────────────────────────────────────────
-analyze = st.button("Analyze Email", type="primary",
-                    use_container_width=True)
+analyze = st.button("Analyze Email", type="primary", use_container_width=True)
 
 if analyze and email_input.strip():
     st.divider()
     st.subheader("Analysis Results")
-
     progress = st.progress(0, text="Starting analysis...")
 
-    # NLP analysis
     progress.progress(25, text="Running NLP text analysis...")
     nlp_score = get_nlp_score(email_input)
 
-    # Extract URLs
     urls_found = extract_urls(email_input)
     first_url = urls_found[0] if urls_found else None
 
-    # URL analysis
     url_score = None
     if first_url:
         progress.progress(50, text="Analyzing URL features...")
         url_score = get_url_score(first_url)
 
-    # Screenshot
     screenshot_path = None
     if first_url and enable_screenshot:
         progress.progress(70, text="Screenshotting website...")
         screenshot_path = take_screenshot(first_url)
 
-    # Combine
     progress.progress(90, text="Combining scores...")
     final_score, method = combine_scores(nlp_score, url_score, nlp_weight)
     progress.progress(100, text="Done!")
     progress.empty()
 
-    # ── Verdict ───────────────────────────────────────────
     if final_score >= 0.5:
         st.error("VERDICT: PHISHING — Do NOT interact with this email!")
     elif final_score >= 0.3:
@@ -294,35 +241,26 @@ if analyze and email_input.strip():
     else:
         st.success("VERDICT: LEGITIMATE — Email appears safe")
 
-    # ── Score breakdown ───────────────────────────────────
     col_nlp, col_url, col_final = st.columns(3)
-
     with col_nlp:
         st.metric("NLP Text Score", f"{nlp_score:.0%}")
-
     with col_url:
-        st.metric("URL Score",
-                  f"{url_score:.0%}" if url_score is not None else "N/A")
-
+        st.metric("URL Score", f"{url_score:.0%}" if url_score is not None else "N/A")
     with col_final:
         st.metric("Final Combined Score", f"{final_score:.0%}")
 
     st.info(f"Fusion method: {method}")
 
-    # ── URLs found ────────────────────────────────────────
     if urls_found:
         st.subheader("URLs Found in Email")
         for url in urls_found:
             st.code(url)
 
-    # ── Screenshot ────────────────────────────────────────
     if screenshot_path and os.path.exists(screenshot_path):
         st.subheader("Website Screenshot")
         img = Image.open(screenshot_path)
-        st.image(img, caption="Screenshot of linked website",
-                 use_container_width=True)
+        st.image(img, caption="Screenshot of linked website", use_container_width=True)
 
-    # ── Score breakdown table ─────────────────────────────
     with st.expander("How was this score calculated?"):
         st.markdown(f"""
         | Component | Score | Weight | Contribution |
