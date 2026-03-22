@@ -135,7 +135,26 @@ def get_nlp_score(text):
     tfidf = vectorizer.transform([cleaned])
     return float(nlp_model.predict_proba(tfidf)[0][1])
 
+# Known legitimate domains — skip URL model for these
+TRUSTED_DOMAINS = [
+    'paypal.com', 'google.com', 'microsoft.com', 'apple.com',
+    'amazon.com', 'facebook.com', 'twitter.com', 'instagram.com',
+    'linkedin.com', 'github.com', 'youtube.com', 'netflix.com',
+    'spotify.com', 'dropbox.com', 'adobe.com', 'zoom.us',
+    'bankofamerica.com', 'chase.com', 'wellsfargo.com', 'citibank.com'
+]
+
 def get_url_score(url):
+    # Check if URL belongs to a trusted domain
+    try:
+        domain = url.split('//')[-1].split('/')[0].lower()
+        # Remove www. prefix
+        domain = domain.replace('www.', '')
+        if any(domain == d or domain.endswith('.' + d) for d in TRUSTED_DOMAINS):
+            return 0.05  # very low score for trusted domains
+    except:
+        pass
+
     features = extract_features(url)
     df = pd.DataFrame([features], columns=FEATURE_NAMES)
     return float(url_model.predict_proba(df)[0][1])
