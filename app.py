@@ -18,12 +18,66 @@ st.set_page_config(
 # ── Load models ───────────────────────────────────────────
 @st.cache_resource
 def load_models():
+    import os
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+    import ast
+
     nlp_model = joblib.load('nlp_model.pkl')
     vectorizer = joblib.load('tfidf_vectorizer.pkl')
-    url_model = joblib.load('url_model.pkl')
-    return nlp_model, vectorizer, url_model
 
-nlp_model, vectorizer, url_model = load_models()
+    # Retrain URL model if pkl doesn't exist
+    if os.path.exists('url_model.pkl'):
+        url_model = joblib.load('url_model.pkl')
+    else:
+        st.info("Setting up URL model for first time... (~30 seconds)")
+
+        # Load email URLs
+        df_emails = pd.read_csv('clean_emails.csv')
+        df_emails['urls'] = df_emails['urls'].apply(ast.literal_eval)
+        df_emails_with_urls = df_emails[
+            df_emails['urls'].apply(len) > 0].copy()
+        df_emails_with_urls['url'] = df_emails_with_urls['urls'].apply(
+            lambda x: x[0])
+        df_email_urls = df_emails_with_urls[['url', 'label']].copy()
+
+        # Load malicious URLs dataset
+        df_malicious = pd.read_csv('malicious_phish.csv')
+        df_malicious = df_malicious[
+            df_malicious['type'].isin(['phishing', 'benign'])]
+        df_malicious['label'] = df_malicious['type'].map(
+            {'benign': 0, 'phishing': 1})
+        df_malicious = df_malicious[['url', 'label']]
+
+        # Use smaller sample for cloud (still accurate)
+        df_benign = df_malicious[
+            df_malicious['label'] == 0].sample(20000, random_state=42)
+        df_phishing = df_malicious[
+            df_malicious['label'] == 1].sample(20000, random_state=42)
+        df_combined = pd.concat(
+            [df_email_urls, df_benign, df_phishing], ignore_index=True)
+        df_combined = df_combined.dropna(subset=['url'])
+        df_combined = df_combined[df_combined['url'].str.strip() != '']
+
+        # Extract features and train
+        features = df_combined['url'].apply(extract_features)
+        X = pd.DataFrame(features.tolist(), columns=FEATURE_NAMES)
+        y = df_combined['label'].reset_index(drop=True)
+
+        X_train, _, y_train, _ = train_test_split(
+            X, y, test_size=0.2, stratify=y, random_state=42)
+
+        url_model = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=15,
+            random_state=42,
+            class_weight='balanced'
+        )
+        url_model.fit(X_train, y_train)
+        joblib.dump(url_model, 'url_model.pkl')
+        st.success("URL model ready!")
+
+    return nlp_model, vectorizer, url_model
 
 # ── URL Feature Extraction ────────────────────────────────
 FEATURE_NAMES = [
