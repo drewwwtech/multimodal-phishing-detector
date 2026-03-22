@@ -86,7 +86,7 @@ def load_models():
     if os.path.exists('url_model.pkl'):
         url_model = joblib.load('url_model.pkl')
     else:
-        st.info("Setting up URL model for first time... (~30 seconds)")
+        setup_msg = st.info("Setting up URL model for first time... (~30 seconds)")
 
         # Load email URLs
         df_emails = pd.read_csv('clean_emails.csv')
@@ -131,6 +131,7 @@ def load_models():
         )
         url_model.fit(X_train, y_train)
         joblib.dump(url_model, 'url_model.pkl')
+        setup_msg.empty()
         st.success("URL model ready!")
 
     return nlp_model, vectorizer, url_model
