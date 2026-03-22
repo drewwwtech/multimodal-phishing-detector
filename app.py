@@ -86,7 +86,7 @@ def load_models():
     if os.path.exists('url_model.pkl'):
         url_model = joblib.load('url_model.pkl')
     else:
-        setup_msg = st.info("Setting up URL model for first time... (~30 seconds)")
+        setup_msg = st.info("Setting up URL model... (this may take 1-2 minutes)")
 
         # Load email URLs
         df_emails = pd.read_csv('clean_emails.csv')
@@ -97,37 +97,49 @@ def load_models():
             lambda x: x[0])
         df_email_urls = df_emails_with_urls[['url', 'label']].copy()
 
-        # Load malicious URLs dataset
-        df_malicious = pd.read_csv('malicious_phish.csv')
+        # Load malicious URLs — full dataset
+        df_malicious = pd.read_csv('malicious_phish.csv',
+                                   usecols=['url', 'type'])  # only load needed columns
         df_malicious = df_malicious[
             df_malicious['type'].isin(['phishing', 'benign'])]
         df_malicious['label'] = df_malicious['type'].map(
             {'benign': 0, 'phishing': 1})
         df_malicious = df_malicious[['url', 'label']]
 
-        # Use smaller sample for cloud (still accurate)
+        # Full dataset — same as paper
         df_benign = df_malicious[
-            df_malicious['label'] == 0].sample(20000, random_state=42)
-        df_phishing = df_malicious[
-            df_malicious['label'] == 1].sample(20000, random_state=42)
+            df_malicious['label'] == 0].sample(50000, random_state=42)
+        df_phishing = df_malicious[df_malicious['label'] == 1]
         df_combined = pd.concat(
             [df_email_urls, df_benign, df_phishing], ignore_index=True)
         df_combined = df_combined.dropna(subset=['url'])
         df_combined = df_combined[df_combined['url'].str.strip() != '']
 
-        # Extract features and train
+        # Free memory before feature extraction
+        del df_malicious, df_benign, df_phishing
+        import gc
+        gc.collect()
+
+        # Extract features
         features = df_combined['url'].apply(extract_features)
         X = pd.DataFrame(features.tolist(), columns=FEATURE_NAMES)
         y = df_combined['label'].reset_index(drop=True)
 
+        # Free more memory
+        del df_combined, features
+        gc.collect()
+
         X_train, _, y_train, _ = train_test_split(
             X, y, test_size=0.2, stratify=y, random_state=42)
 
+        # Memory efficient Random Forest settings
         url_model = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=15,
+            n_estimators=200,
+            max_depth=20,
+            min_samples_split=5,
             random_state=42,
-            class_weight='balanced'
+            class_weight='balanced',
+            n_jobs=-1    # use all CPU cores — faster training
         )
         url_model.fit(X_train, y_train)
         joblib.dump(url_model, 'url_model.pkl')
