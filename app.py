@@ -145,14 +145,28 @@ def take_screenshot(url, save_path='temp_screenshot.png'):
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
-        from webdriver_manager.chrome import ChromeDriverManager
+
         options = Options()
         options.add_argument("--headless")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1280,800")
         options.add_argument("--disable-gpu")
-        service = Service(ChromeDriverManager().install())
+
+        # Try Streamlit Cloud path first, fall back to local
+        import shutil
+        chrome_path = shutil.which("chromium") or \
+                      shutil.which("chromium-browser") or \
+                      shutil.which("google-chrome")
+
+        if chrome_path:
+            options.binary_location = chrome_path
+            chromedriver_path = shutil.which("chromedriver")
+            service = Service(chromedriver_path)
+        else:
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+
         driver = webdriver.Chrome(service=service, options=options)
         driver.set_page_load_timeout(10)
         driver.get(url)
