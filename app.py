@@ -15,13 +15,69 @@ st.set_page_config(
     layout="wide"
 )
 
+# ── URL Feature Extraction ────────────────────────────────
+# Defined BEFORE load_models so extract_features is available
+# when the URL model is being retrained inside load_models
+
+FEATURE_NAMES = [
+    'url_length', 'dot_count', 'slash_count',
+    'has_ip', 'has_at', 'has_https', 'has_port',
+    'domain_length', 'subdomain_count',
+    'suspicious_words', 'has_hyphen',
+    'digit_count', 'special_chars',
+    'double_slash', 'path_length', 'has_shortener'
+]
+
+def extract_features(url):
+    def get_url_length(url): return len(url)
+    def get_dot_count(url): return url.count('.')
+    def get_slash_count(url): return url.count('/')
+    def has_ip_address(url): return 1 if re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', url) else 0
+    def has_at_symbol(url): return 1 if '@' in url else 0
+    def has_https(url): return 1 if url.startswith('https') else 0
+    def has_port(url): return 1 if re.search(r':\d+', url.split('//')[-1]) else 0
+    def get_domain_length(url):
+        try: return len(url.split('//')[-1].split('/')[0])
+        except: return 0
+    def get_subdomain_count(url):
+        try:
+            parts = url.split('//')[-1].split('/')[0].split('.')
+            return max(0, len(parts) - 2)
+        except: return 0
+    def has_suspicious_words(url):
+        words = ['login','verify','secure','account','update',
+                 'confirm','banking','paypal','password','signin','authenticate']
+        return 1 if any(w in url.lower() for w in words) else 0
+    def has_hyphen(url):
+        try: return 1 if '-' in url.split('//')[-1].split('/')[0] else 0
+        except: return 0
+    def get_digit_count(url): return sum(c.isdigit() for c in url)
+    def get_special_char_count(url): return sum(c in '!#$%^&*~`' for c in url)
+    def has_double_slash(url): return 1 if '//' in url[7:] else 0
+    def get_path_length(url):
+        try:
+            path = url.split('//')[-1].split('/', 1)
+            return len(path[1]) if len(path) > 1 else 0
+        except: return 0
+    def has_shortener(url):
+        return 1 if any(s in url.lower() for s in
+                       ['bit.ly','tinyurl','goo.gl','t.co','ow.ly','short.io']) else 0
+
+    return [
+        get_url_length(url), get_dot_count(url), get_slash_count(url),
+        has_ip_address(url), has_at_symbol(url), has_https(url),
+        has_port(url), get_domain_length(url), get_subdomain_count(url),
+        has_suspicious_words(url), has_hyphen(url), get_digit_count(url),
+        get_special_char_count(url), has_double_slash(url),
+        get_path_length(url), has_shortener(url),
+    ]
+
+
 # ── Load models ───────────────────────────────────────────
 @st.cache_resource
 def load_models():
-    import os
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import train_test_split
-    import ast
 
     nlp_model = joblib.load('nlp_model.pkl')
     vectorizer = joblib.load('tfidf_vectorizer.pkl')
@@ -79,59 +135,11 @@ def load_models():
 
     return nlp_model, vectorizer, url_model
 
-# ── URL Feature Extraction ────────────────────────────────
-FEATURE_NAMES = [
-    'url_length', 'dot_count', 'slash_count',
-    'has_ip', 'has_at', 'has_https', 'has_port',
-    'domain_length', 'subdomain_count',
-    'suspicious_words', 'has_hyphen',
-    'digit_count', 'special_chars',
-    'double_slash', 'path_length', 'has_shortener'
-]
 
-def extract_features(url):
-    def get_url_length(url): return len(url)
-    def get_dot_count(url): return url.count('.')
-    def get_slash_count(url): return url.count('/')
-    def has_ip_address(url): return 1 if re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', url) else 0
-    def has_at_symbol(url): return 1 if '@' in url else 0
-    def has_https(url): return 1 if url.startswith('https') else 0
-    def has_port(url): return 1 if re.search(r':\d+', url.split('//')[-1]) else 0
-    def get_domain_length(url):
-        try: return len(url.split('//')[-1].split('/')[0])
-        except: return 0
-    def get_subdomain_count(url):
-        try:
-            parts = url.split('//')[-1].split('/')[0].split('.')
-            return max(0, len(parts) - 2)
-        except: return 0
-    def has_suspicious_words(url):
-        words = ['login','verify','secure','account','update',
-                 'confirm','banking','paypal','password','signin','authenticate']
-        return 1 if any(w in url.lower() for w in words) else 0
-    def has_hyphen(url):
-        try: return 1 if '-' in url.split('//')[-1].split('/')[0] else 0
-        except: return 0
-    def get_digit_count(url): return sum(c.isdigit() for c in url)
-    def get_special_char_count(url): return sum(c in '!#$%^&*~`' for c in url)
-    def has_double_slash(url): return 1 if '//' in url[7:] else 0
-    def get_path_length(url):
-        try:
-            path = url.split('//')[-1].split('/', 1)
-            return len(path[1]) if len(path) > 1 else 0
-        except: return 0
-    def has_shortener(url):
-        return 1 if any(s in url.lower() for s in
-                       ['bit.ly','tinyurl','goo.gl','t.co','ow.ly','short.io']) else 0
+# ── Unpack models into global variables ───────────────────
+# This is critical — functions below need these as globals
+nlp_model, vectorizer, url_model = load_models()
 
-    return [
-        get_url_length(url), get_dot_count(url), get_slash_count(url),
-        has_ip_address(url), has_at_symbol(url), has_https(url),
-        has_port(url), get_domain_length(url), get_subdomain_count(url),
-        has_suspicious_words(url), has_hyphen(url), get_digit_count(url),
-        get_special_char_count(url), has_double_slash(url),
-        get_path_length(url), has_shortener(url),
-    ]
 
 # ── Helper functions ──────────────────────────────────────
 
@@ -180,16 +188,16 @@ def take_screenshot(url, save_path='temp_screenshot.png'):
     except Exception as e:
         return None
 
-def combine_scores(nlp_score, url_score=None):
-    NLP_WEIGHT = 0.6
-    URL_WEIGHT = 0.4
+def combine_scores(nlp_score, url_score=None, nlp_weight=0.6):
+    url_weight = round(1.0 - nlp_weight, 1)
     if url_score is None:
         final_score = nlp_score
         method = "NLP only (no URL found)"
     else:
-        final_score = (NLP_WEIGHT * nlp_score) + (URL_WEIGHT * url_score)
-        method = f"Weighted average (NLP x{NLP_WEIGHT} + URL x{URL_WEIGHT})"
+        final_score = (nlp_weight * nlp_score) + (url_weight * url_score)
+        method = f"Weighted average (NLP x{nlp_weight} + URL x{url_weight})"
     return final_score, method
+
 
 # ── App Layout ────────────────────────────────────────────
 
@@ -222,7 +230,8 @@ with col2:
     st.info(
         "The detector automatically balances between "
         "analyzing the **email text** (60%) and the "
-        "**linked website** (40%). Adjust the slider below to change how much weight each component has in the final score."
+        "**linked website** (40%). Adjust the slider below "
+        "to change how much weight each component has in the final score."
     )
     nlp_weight = st.slider("NLP Weight", 0.0, 1.0, 0.6, 0.1)
     url_weight = round(1.0 - nlp_weight, 1)
@@ -249,28 +258,28 @@ if analyze and email_input.strip():
     # URL analysis
     url_score = None
     if first_url:
-        progress.progress(50, text=f"Analyzing URL features...")
+        progress.progress(50, text="Analyzing URL features...")
         url_score = get_url_score(first_url)
 
     # Screenshot
     screenshot_path = None
     if first_url and enable_screenshot:
-        progress.progress(70, text=f"Screenshotting website...")
+        progress.progress(70, text="Screenshotting website...")
         screenshot_path = take_screenshot(first_url)
 
     # Combine
     progress.progress(90, text="Combining scores...")
-    final_score, method = combine_scores(nlp_score, url_score)
+    final_score, method = combine_scores(nlp_score, url_score, nlp_weight)
     progress.progress(100, text="Done!")
     progress.empty()
 
     # ── Verdict ───────────────────────────────────────────
     if final_score >= 0.5:
-        st.error(f"VERDICT: PHISHING — Do NOT interact with this email!")
+        st.error("VERDICT: PHISHING — Do NOT interact with this email!")
     elif final_score >= 0.3:
-        st.warning(f"VERDICT: SUSPICIOUS — Proceed with caution")
+        st.warning("VERDICT: SUSPICIOUS — Proceed with caution")
     else:
-        st.success(f"VERDICT: LEGITIMATE — Email appears safe")
+        st.success("VERDICT: LEGITIMATE — Email appears safe")
 
     # ── Score breakdown ───────────────────────────────────
     col_nlp, col_url, col_final = st.columns(3)
@@ -316,4 +325,4 @@ elif analyze:
     st.warning("Please paste email content before clicking Analyze.")
 
 st.divider()
-st.caption("IAS1 Cybersecurity Project — Group 4 | For educational purposes only")
+st.caption("IAS101 Project — Group 4 | For educational purposes only")
